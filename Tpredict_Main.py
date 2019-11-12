@@ -3,15 +3,14 @@ Final project for Astrodynamics
 Astronautical Engineering, National University of San Martín
 Professor: DÍAZ RAMOS, Manuel Francisco
 Student: BURRONI, Tomás Ignacio
-2018/12/13
+2019/12/13
 
 This code was fully developed by Tom Burroni, using algorithms from 'Fundamentals of Astrodynamics and Applications' by David A. Vallado and the sgp4 package developed by Brandon Rhodes. It was built for use in the Miguelete Ground Station at UNSAM but it is free for anyone else to use.
 
 To get the manuals, report issues, or anything else do not hesitate to contact me.
 
-contact: burroni.ti@gmail.com
+contact: tburroni@unsam.edu.ar
 '''
-
 
 
 #LIBRARIES---------------------------------------------
@@ -25,6 +24,7 @@ import Transformations as tr
 from datetime import datetime
 from datetime import timedelta
 import matplotlib.pyplot as plt
+from tabulate import tabulate
 
 
 
@@ -45,6 +45,8 @@ celestrak = 'https://www.celestrak.com/NORAD/elements/'
 
 
 satStandard = np.array([' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','\r','\n'])
+coarse = 60
+fine = 1
 
 
 
@@ -161,6 +163,7 @@ class Package():     # class that contains all the satellites and the ground sta
         self.X = 0                              # X, Y, Z coordinates in ECI
         self.time = []                          # Time vector (list of datetime values)
         self.obs = 0                            # Azimuth, elevation and range
+        self.passes = 0
         
     def getTLEs(self):          # Gets the TLEs for all the sats
         i = 0
@@ -215,6 +218,41 @@ class Package():     # class that contains all the satellites and the ground sta
         for i in range(0,len(self.sats)):   # Goes through each sat
             for i2 in range(0,np.ma.size(self.X,axis=1)):   # For all time
                 self.obs[i][i2] = tr.ECI2obs(self.X[i][i2][0], self.X[i][i2][1], self.X[i][i2][2], self.gs_llh[0], self.gs_llh[1], self.gs_llh[2], self.time[i2])   # This function is in Transformations.py
+    
+    def find_passes(self, grav, minel):
+        i = 0
+        first = 1
+        counter = 0
+        for i in range(0,len(self.sats)):
+            tcomp = datetime(2000,1,1,0,0,0,0)
+            for i2 in range(0,np.ma.size(self.X,axis=1)):
+                if self.time[i2] - tcomp > timedelta(0,20*60):
+                    if self.obs[i][i2][1] > 0:
+                        counter += 1
+                        if i2:
+                            i2 -= 1
+                        temp = self.time[i2]
+                        start = 1
+                        passx = np.array([i,datetime(2000,1,1,0,0,0,0),0,0,0])
+                        el = 1
+                        while el > 0 or start:
+                            r = pr.sgp4Prop_fine(self.line1[i], self.line2[i], temp, grav)
+                            azi, el, ran = tr.ECI2obs(r[0],r[1],r[2],self.gs_llh[0], self.gs_llh[1], self.gs_llh[2],temp)
+                            passx = np.vstack((passx,(i,self.time[i2],azi,el,ran)))
+                            if start:
+                                if el > 0:
+                                    start = 0
+                            temp += timedelta(0,fine)
+                        maxel = np.amax(passx,axis=0)[3]
+                        if maxel > minel:
+                            if first:
+                                self.passes = np.copy(passx)
+                                first = 0
+                            else:
+                                self.passes = np.vstack((self.passes,passx))
+                        del passx
+                        tcomp = temp
+        return counter
 
 
 
@@ -374,34 +412,54 @@ else:
         grav = '72'
     else:
         grav = '72old'
-    pack.propagate(grav, t0, tf, timedelta(0,1))       # Propagates the orbit for the defined time intervals. It doesn't go from t0 to t1 but rather from time in t0 to time in tf for each day between t0 and tf
+    pack.propagate(grav, t0, tf, timedelta(0,coarse))       # Propagates the orbit for the defined time intervals. It doesn't go from t0 to t1 but rather from time in t0 to time in tf for each day between t0 and tf
 
 # Transforms to obs
 pack.transform()
 
-#print (pack.obs)
-
-
-# Polar plot
-fig = plt.figure(1)
-ax = fig.add_subplot(1, 1, 1, polar=True)
+# Searches for passes
+counter = pack.find_passes(grav, minel)
 
 def mapr(r):            # Remap the radial axis, the default goes from 0 inside to x outside
-   return 90 - r
+    return 90 - r
 
-theta = 2*np.pi - pack.obs[0][:,0]*np.pi/180        # The angle also goes the other way and it has to be in radians. I still have to turn the labels around
 
-ax.set_theta_zero_location("N")
-ax.plot(theta, mapr(pack.obs[0][:,1]),'bo',markersize=5)
-ax.set_yticks(range(0, 90, 10))                   # Define the yticks
-ax.set_yticklabels(map(str, range(90, 0, -10)))   # Change the labels
-ax.set_ylim(0,90)
-#ax.set_xticks(range(0, 360, 45))                  # Define the xticks
-#ax.set_xticklabels(map(str, range(360, 0, -45)))  # Change the labels
+header = ['Date & time', 'Satellite']
+table = np.array([datetime(2000,1,1,0,0,0,0), 'NULL'])
+
+# Polar plot
+p = 0
+for i in range(0,len(pack.passes)):
+    if pack.passes[i][1] == datetime(2000,1,1,0,0,0,0):
+        for i2 in range(i+1,len(pack.passes)):
+            if pack.passes[i2][1] == datetime(2000,1,1,0,0,0,0):
+                break
+        fig = plt.figure(p)
+        ax = fig.add_subplot(1, 1, 1, polar=True)
+        invazi = 2*np.pi - pack.passes[i+1:i2,2]*np.pi/180        # The angle also goes the other way and it has to be in radians. I still have to turn the labels around
+        ax.set_theta_zero_location('N')
+        ax.plot(invazi, mapr(pack.passes[i+1:i2,3]),'bo',markersize=5)
+        ax.set_yticks(range(0, 90, 10))                     # Define the yticks
+        ax.set_yticklabels(map(str, range(90, 0, -10)))     # Change the labels
+        ax.set_ylim(0,90)
+        xlabels = list(map(str, range(360, 0, -45)))
+        xlabels[0] = 'N'
+        xlabels[2] = 'W'
+        xlabels[4] = 'S'
+        xlabels[6] = 'E'
+        ax.set_xticklabels(xlabels)                         # Change the labels
+        fig.suptitle(pack.sats[pack.passes[i][0]],x=0.02,y=0.98,ha='left',va='top',size='xx-large')
+        ax.set_title(pack.passes[i+1][1] + timedelta(hours = utcloc))
+        table = np.vstack((table, np.array([pack.passes[i+1][1],pack.sats[pack.passes[i+1][0]].rstrip()])))
+        p += 1
 
 plt.show()
 
+for t in range(1,len(table)):
+    table[t][0] += timedelta(hours = utcloc)
 
+table = table[table[:,0].argsort()]
+print (tabulate(table[1:,:], header, tablefmt='fancy_grid'))
 
 
 
@@ -464,13 +522,4 @@ plt.ylabel('Latitude [deg]')
 plt.xlabel('Longitude [deg]')
 
 plt.show()
-'''
-
-
-
-#FUTURE UPDATES---------------------------------------------
-
-
-'''
-Save TLEs for faster processing and ask when to update them
 '''
