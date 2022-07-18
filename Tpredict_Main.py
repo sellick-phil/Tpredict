@@ -10,7 +10,7 @@ This code was fully developed by Tom Burroni, using algorithms from 'Fundamental
 To get the manuals, report issues, or anything else do not hesitate to contact me.
 
 contact: tburroni@unsam.edu.ar
-''''''''''
+'''
 
 
 #LIBRARIES---------------------------------------------
